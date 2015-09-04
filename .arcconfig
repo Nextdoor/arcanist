@@ -1,5 +1,6 @@
 {
-  "phabricator.uri": "https://secure.phabricator.com/",
+  "phabricator.uri" :
+    "http://dev-phabricator-uswest2-i-681e599e.cloud.nextdoor.com:8000/",
   "load": [
     "src/"
   ]
