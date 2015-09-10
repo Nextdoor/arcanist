@@ -18,6 +18,8 @@
  *      getCustomArgumentsForCommand().
  *
  * @concrete-extensible
+ * @phutil-external-symbol class PostDiffHook
+ * @phutil-external-symbol class PostLandHook
  */
 class ArcanistConfiguration extends Phobject {
 
@@ -50,8 +52,7 @@ class ArcanistConfiguration extends Phobject {
   }
 
   public function didRunWorkflow($command, ArcanistWorkflow $workflow, $err) {
-
-    // This is a hook.
+    $this->customDidRunWorkflow($command, $workflow, $err);
   }
 
   public function didAbortWorkflow($command, $workflow, Exception $ex) {
@@ -251,4 +252,23 @@ class ArcanistConfiguration extends Phobject {
     return array_keys($distances);
   }
 
+  private function customDidRunWorkflow($command,
+                                        ArcanistWorkflow $workflow,
+                                        $err) {
+    $workflow_name = $workflow->getWorkflowName();
+
+    if (!$err) {
+      $hook = null;
+
+      switch ($workflow_name) {
+        case 'diff': $hook = new PostDiffHook(); break;
+        case 'land': $hook = new PostLandHook(); break;
+        default: $hook = null; // fallthrough
+      }
+
+      if ($hook) {
+        $hook->doHook($workflow);
+      }
+    }
+  }
 }
