@@ -2672,7 +2672,7 @@ EOTEXT
       $push_flags[] = '--no-verify';
     }
     $err = phutil_passthru(
-      'git push %Ls -- %s %s:refs/tags/%s',
+      'git push %Ls -- %s %s:refs/heads/%s',
       $push_flags,
       $staging_uri,
       $commit,
@@ -2686,7 +2686,7 @@ EOTEXT
       $this->writeOkay(
         pht('STAGING PUSHED'),
         pht(
-          'Pushed a copy of the changes to tag "%s" in the staging area.',
+          'Pushed a copy of the changes to branch "%s" in the staging area.',
           $tag));
     }
   }
