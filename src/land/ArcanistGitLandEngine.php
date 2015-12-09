@@ -183,7 +183,7 @@ final class ArcanistGitLandEngine
     }
 
     $api->execxLocal(
-      'commit --author %s --date %s -F %s --',
+      'commit --no-verify --author %s --date %s -F %s --',
       $original_author,
       $original_date,
       $this->getCommitMessageFile());
