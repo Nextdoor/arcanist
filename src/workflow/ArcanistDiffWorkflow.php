@@ -22,6 +22,15 @@ final class ArcanistDiffWorkflow extends ArcanistWorkflow {
   private $commitMessageFromRevision;
   private $hitAutotargets;
 
+  const STAGING_PUSHED = 'pushed';
+  const STAGING_USER_SKIP = 'user.skip';
+  const STAGING_DIFF_RAW = 'diff.raw';
+  const STAGING_REPOSITORY_UNKNOWN = 'repository.unknown';
+  const STAGING_REPOSITORY_UNAVAILABLE = 'repository.unavailable';
+  const STAGING_REPOSITORY_UNSUPPORTED = 'repository.unsupported';
+  const STAGING_REPOSITORY_UNCONFIGURED = 'repository.unconfigured';
+  const STAGING_CLIENT_UNSUPPORTED = 'client.unsupported';
+
   public function getWorkflowName() {
     return 'diff';
   }
@@ -520,7 +529,7 @@ EOTEXT
         'unitResult' => $unit_result,
       ));
 
-    $this->pushChangesToStagingArea($this->diffID);
+    $this->submitChangesToStagingArea($this->diffID);
 
     $phid = idx($diff_info, 'phid');
     if ($phid) {
@@ -532,6 +541,7 @@ EOTEXT
     $this->updateLintDiffProperty();
     $this->updateUnitDiffProperty();
     $this->updateLocalDiffProperty();
+    $this->updateOntoDiffProperty();
     $this->resolveDiffPropertyUpdates();
 
     $output_json = $this->getArgument('json');
@@ -1806,12 +1816,7 @@ EOTEXT
     }
 
     $reviewers = $message->getFieldValue('reviewerPHIDs');
-    if (!$reviewers) {
-      $confirm = pht('You have not specified any reviewers. Continue anyway?');
-      if (!phutil_console_confirm($confirm)) {
-        throw new ArcanistUsageException(pht('Specify reviewers and retry.'));
-      }
-    } else {
+    if ($reviewers) {
       $futures['reviewers'] = $this->getConduit()->callMethod(
         'user.query',
         array(
@@ -2407,6 +2412,58 @@ EOTEXT
     $this->updateDiffProperty('local:commits', json_encode($local_info));
   }
 
+  private function updateOntoDiffProperty() {
+    $onto = $this->getDiffOntoTargets();
+
+    if (!$onto) {
+      return;
+    }
+
+    $this->updateDiffProperty('arc:onto', json_encode($onto));
+  }
+
+  private function getDiffOntoTargets() {
+    if ($this->isRawDiffSource()) {
+      return null;
+    }
+
+    $api = $this->getRepositoryAPI();
+
+    if (!($api instanceof ArcanistGitAPI)) {
+      return null;
+    }
+
+    // If we track an upstream branch either directly or indirectly, use that.
+    $branch = $api->getBranchName();
+    if (strlen($branch)) {
+      $upstream_path = $api->getPathToUpstream($branch);
+      $remote_branch = $upstream_path->getRemoteBranchName();
+      if (strlen($remote_branch)) {
+        return array(
+          array(
+            'type' => 'branch',
+            'name' => $remote_branch,
+            'kind' => 'upstream',
+          ),
+        );
+      }
+    }
+
+    // If "arc.land.onto.default" is configured, use that.
+    $config_key = 'arc.land.onto.default';
+    $onto = $this->getConfigFromAnySource($config_key);
+    if (strlen($onto)) {
+      return array(
+        array(
+          'type' => 'branch',
+          'name' => $onto,
+          'kind' => 'arc.land.onto.default',
+        ),
+      );
+    }
+
+    return null;
+  }
 
   /**
    * Update an arbitrary diff property.
@@ -2468,13 +2525,19 @@ EOTEXT
     $id = $revision['id'];
     $title = $revision['title'];
 
-    throw new ArcanistUsageException(
-      pht(
-        "You don't own revision %s '%s'. You can only update revisions ".
-        "you own. You can 'Commandeer' this revision from the web ".
-        "interface if you want to become the owner.",
-        "D{$id}",
-        $title));
+    $prompt = pht(
+      "You don't own revision %s: \"%s\". Normally, you should ".
+      "only update revisions you own. You can \"Commandeer\" this revision ".
+      "from the web interface if you want to become the owner.\n\n".
+      "Update this revision anyway?",
+      "D{$id}",
+      $title);
+
+    $ok = phutil_console_confirm($prompt, $default_no = true);
+    if (!$ok) {
+      throw new ArcanistUsageException(
+        pht('Aborted update of revision: You are not the owner.'));
+    }
   }
 
 
@@ -2524,10 +2587,6 @@ EOTEXT
     foreach ($need_upload as $key => $spec) {
       $change = $need_upload[$key]['change'];
 
-      $type = $spec['type'];
-      $size = strlen($spec['data']);
-
-      $change->setMetadata("{$type}:file:size", $size);
       if ($spec['data'] === null) {
         // This covers the case where a file was added or removed; we don't
         // need to upload the other half of it (e.g., the old file data for
@@ -2536,6 +2595,11 @@ EOTEXT
         unset($need_upload[$key]);
         continue;
       }
+
+      $type = $spec['type'];
+      $size = strlen($spec['data']);
+
+      $change->setMetadata("{$type}:file:size", $size);
 
       $mime = $this->getFileMimeType($spec['data']);
       if (preg_match('@^image/@', $mime)) {
@@ -2605,26 +2669,50 @@ EOTEXT
     return $this->getArgument('browse');
   }
 
+  private function submitChangesToStagingArea($id) {
+    $result = $this->pushChangesToStagingArea($id);
+
+    // We'll either get a failure constant on error, or a list of pushed
+    // refs on success.
+    $ok = is_array($result);
+
+    if ($ok) {
+      $staging = array(
+        'status' => self::STAGING_PUSHED,
+        'refs' => $result,
+      );
+    } else {
+      $staging = array(
+        'status' => $result,
+        'refs' => array(),
+      );
+    }
+
+    $this->updateDiffProperty(
+      'arc.staging',
+      phutil_json_encode($staging));
+  }
+
   private function pushChangesToStagingArea($id) {
     if ($this->getArgument('skip-staging')) {
       $this->writeInfo(
         pht('SKIP STAGING'),
         pht('Flag --skip-staging was specified.'));
-      return;
+      return self::STAGING_USER_SKIP;
     }
 
     if ($this->isRawDiffSource()) {
       $this->writeInfo(
         pht('SKIP STAGING'),
         pht('Raw changes can not be pushed to a staging area.'));
-      return;
+      return self::STAGING_DIFF_RAW;
     }
 
     if (!$this->getRepositoryPHID()) {
       $this->writeInfo(
         pht('SKIP STAGING'),
         pht('Unable to determine repository for this change.'));
-      return;
+      return self::STAGING_REPOSITORY_UNKNOWN;
     }
 
     $staging = $this->getRepositoryStagingConfiguration();
@@ -2632,7 +2720,7 @@ EOTEXT
       $this->writeInfo(
         pht('SKIP STAGING'),
         pht('The server does not support staging areas.'));
-      return;
+      return self::STAGING_REPOSITORY_UNAVAILABLE;
     }
 
     $supported = idx($staging, 'supported');
@@ -2640,7 +2728,7 @@ EOTEXT
       $this->writeInfo(
         pht('SKIP STAGING'),
         pht('Phabricator does not support staging areas for this repository.'));
-      return;
+      return self::STAGING_REPOSITORY_UNSUPPORTED;
     }
 
     $staging_uri = idx($staging, 'uri');
@@ -2648,7 +2736,7 @@ EOTEXT
       $this->writeInfo(
         pht('SKIP STAGING'),
         pht('No staging area is configured for this repository.'));
-      return;
+      return self::STAGING_REPOSITORY_UNCONFIGURED;
     }
 
     $api = $this->getRepositoryAPI();
@@ -2656,12 +2744,14 @@ EOTEXT
       $this->writeInfo(
         pht('SKIP STAGING'),
         pht('This client version does not support staging this repository.'));
-      return;
+      return self::STAGING_CLIENT_UNSUPPORTED;
     }
 
     $commit = $api->getHeadCommit();
     $prefix = idx($staging, 'prefix', 'phabricator');
-    $tag = $prefix.'/diff/'.$id;
+
+    $base_tag = "refs/tags/{$prefix}/base/{$id}";
+    $diff_tag = "refs/tags/{$prefix}/diff/{$id}";
 
     $this->writeOkay(
       pht('PUSH STAGING'),
@@ -2671,24 +2761,63 @@ EOTEXT
     if (version_compare($api->getGitVersion(), '1.8.2', '>=')) {
       $push_flags[] = '--no-verify';
     }
+
+    $refs = array();
+
+    $remote = array(
+      'uri' => $staging_uri,
+    );
+
+    // If the base commit is a real commit, we're going to push it. We don't
+    // use this, but pushing it to a ref reduces the amount of redundant work
+    // that Git does on later pushes by helping it figure out that the remote
+    // already has most of the history. See T10509.
+
+    // In the future, we could avoid this push if the staging area is the same
+    // as the main repository, or if the staging area is a virtual repository.
+    // In these cases, the staging area should automatically have up-to-date
+    // refs.
+    $base_commit = $api->getSourceControlBaseRevision();
+    if ($base_commit !== ArcanistGitAPI::GIT_MAGIC_ROOT_COMMIT) {
+      $refs[] = array(
+        'ref' => $base_tag,
+        'type' => 'base',
+        'commit' => $base_commit,
+        'remote' => $remote,
+      );
+    }
+
+    // We're always going to push the change itself.
+    $refs[] = array(
+      'ref' => $diff_tag,
+      'type' => 'diff',
+      'commit' => $commit,
+      'remote' => $remote,
+    );
+
+    $ref_list = array();
+    foreach ($refs as $ref) {
+      $ref_list[] = $ref['commit'].':'.$ref['ref'];
+    }
+
     $err = phutil_passthru(
-      'git push %Ls -- %s %s:refs/heads/%s',
+      'git push %Ls -- %s %Ls',
       $push_flags,
       $staging_uri,
-      $commit,
-      $tag);
+      $ref_list);
 
     if ($err) {
       $this->writeWarn(
         pht('STAGING FAILED'),
         pht('Unable to push changes to the staging area.'));
-    } else {
-      $this->writeOkay(
-        pht('STAGING PUSHED'),
+
+      throw new ArcanistUsageException(
         pht(
-          'Pushed a copy of the changes to branch "%s" in the staging area.',
-          $tag));
+          'Failed to push changes to staging area. Correct the issue, or '.
+          'use --skip-staging to skip this step.'));
     }
+
+    return $refs;
   }
 
 

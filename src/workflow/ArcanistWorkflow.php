@@ -673,9 +673,8 @@ abstract class ArcanistWorkflow extends Phobject {
         }
 
         if (!array_key_exists($arg_key, $spec)) {
-          $corrected = ArcanistConfiguration::correctArgumentSpelling(
-            $arg_key,
-            array_keys($spec));
+          $corrected = PhutilArgumentSpellingCorrector::newFlagCorrector()
+            ->correctSpelling($arg_key, array_keys($spec));
           if (count($corrected) == 1) {
             PhutilConsole::getConsole()->writeErr(
               pht(
@@ -1107,8 +1106,17 @@ abstract class ArcanistWorkflow extends Phobject {
     // Don't amend the current commit if it has already been published.
     $repository = $this->loadProjectRepository();
     if ($repository) {
-      $callsign = $repository['callsign'];
-      $commit_name = 'r'.$callsign.$commit['commit'];
+      $repo_id = $repository['id'];
+      $commit_hash = $commit['commit'];
+      $callsign =  idx($repository, 'callsign');
+      if ($callsign) {
+        // The server might be too old to support the new style commit names,
+        // so prefer the old way
+        $commit_name = "r{$callsign}{$commit_hash}";
+      } else {
+        $commit_name = "R{$repo_id}:{$commit_hash}";
+      }
+
       $result = $this->getConduit()->callMethodSynchronous(
         'diffusion.querycommits',
         array('names' => array($commit_name)));
@@ -1686,18 +1694,17 @@ abstract class ArcanistWorkflow extends Phobject {
     return idx($this->getRepositoryInformation(), 'phid');
   }
 
-
   /**
-   * Get the callsign of the Phabricator repository this working copy
+   * Get the name of the Phabricator repository this working copy
    * corresponds to. Returns `null` if no repository can be identified.
    *
-   * @return string|null  Repository callsign, or null if no repository can be
+   * @return string|null  Repository name, or null if no repository can be
    *                      identified.
    *
    * @task phabrep
    */
-  final protected function getRepositoryCallsign() {
-    return idx($this->getRepositoryInformation(), 'callsign');
+  final protected function getRepositoryName() {
+    return idx($this->getRepositoryInformation(), 'name');
   }
 
 
@@ -2013,12 +2020,12 @@ abstract class ArcanistWorkflow extends Phobject {
     // If we know which repository we're in, try to tell Phabricator that we
     // pushed commits to it so it can update. This hint can help pull updates
     // more quickly, especially in rarely-used repositories.
-    if ($this->getRepositoryCallsign()) {
+    if ($this->getRepositoryPHID()) {
       try {
         $this->getConduit()->callMethodSynchronous(
           'diffusion.looksoon',
           array(
-            'callsigns' => array($this->getRepositoryCallsign()),
+            'repositories' => array($this->getRepositoryPHID()),
           ));
       } catch (ConduitClientException $ex) {
         // If we hit an exception, just ignore it. Likely, we are running
@@ -2036,6 +2043,13 @@ abstract class ArcanistWorkflow extends Phobject {
 
   protected function getModernUnitDictionary(array $map) {
     $map = $this->getModernCommonDictionary($map);
+
+    $details = idx($map, 'userData');
+    if (strlen($details)) {
+      $map['details'] = (string)$details;
+    }
+    unset($map['userData']);
+
     return $map;
   }
 

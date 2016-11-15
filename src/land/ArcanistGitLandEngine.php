@@ -29,9 +29,7 @@ final class ArcanistGitLandEngine
       $this->updateWorkingCopy();
 
       if ($this->getShouldHold()) {
-        $this->writeInfo(
-          pht('HOLD'),
-          pht('Holding change locally, it has not been pushed.'));
+        $this->didHoldChanges();
       } else {
         $this->pushChange();
         $this->reconcileLocalState();
@@ -130,10 +128,22 @@ final class ArcanistGitLandEngine
       pht('FETCH'),
       pht('Fetching %s...', $ref));
 
-    $api->execxLocal(
-      'fetch -- %s %s',
+    // NOTE: Although this output isn't hugely useful, we need to passthru
+    // instead of using a subprocess here because `git fetch` may prompt the
+    // user to enter a password if they're fetching over HTTP with basic
+    // authentication. See T10314.
+
+    $err = $api->execPassthru(
+      'fetch --quiet -- %s %s',
       $this->getTargetRemote(),
       $this->getTargetOnto());
+
+    if ($err) {
+      throw new ArcanistUsageException(
+        pht(
+          'Fetch failed! Fix the error and run "%s" again.',
+          'arc land'));
+    }
   }
 
   private function updateWorkingCopy() {
@@ -171,7 +181,10 @@ final class ArcanistGitLandEngine
           $this->getTargetFullRef()));
     }
 
-    list($changes) = $api->execxLocal('diff HEAD --');
+    // TODO: This could probably be cleaner by asking the API a question
+    // about working copy status instead of running a raw diff command. See
+    // discussion in T11435.
+    list($changes) = $api->execxLocal('diff --no-ext-diff HEAD --');
     $changes = trim($changes);
     if (!strlen($changes)) {
       throw new Exception(
@@ -540,6 +553,43 @@ final class ArcanistGitLandEngine
       "$author <{$email}>",
       $date,
     );
+  }
+
+  private function didHoldChanges() {
+    $this->writeInfo(
+      pht('HOLD'),
+      pht(
+        'Holding change locally, it has not been pushed.'));
+
+    $push_command = csprintf(
+      '$ git push -- %R %R:%R',
+      $this->getTargetRemote(),
+      $this->mergedRef,
+      $this->getTargetOnto());
+
+    $restore_command = csprintf(
+      '$ git checkout %R --',
+      $this->localRef);
+
+    echo tsprintf(
+      "\n%s\n\n".
+      "%s\n\n".
+      "    %s\n\n".
+      "%s\n\n".
+      "    %s\n\n".
+      "%s\n",
+      pht(
+        'This local working copy now contains the merged changes in a '.
+        'detached state.'),
+      pht('You can push the changes manually with this command:'),
+      $push_command,
+      pht(
+        'You can go back to how things were before you ran `arc land` with '.
+        'this command:'),
+      $restore_command,
+      pht(
+        'Local branches have not been changed, and are still in exactly the '.
+        'same state as before.'));
   }
 
 }

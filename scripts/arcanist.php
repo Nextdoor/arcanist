@@ -74,17 +74,27 @@ $config = null;
 $workflow = null;
 
 try {
+  if ($config_trace_mode) {
+    echo tsprintf(
+      "**<bg:magenta> %s </bg>** %s\n",
+      pht('ARGV'),
+      csprintf('%Ls', $original_argv));
 
-  $console->writeLog(
-    "%s\n",
-    pht(
-      "libphutil loaded from '%s'.",
-      phutil_get_library_root('phutil')));
-  $console->writeLog(
-    "%s\n",
-    pht(
-      "arcanist loaded from '%s'.",
-      phutil_get_library_root('arcanist')));
+    $libraries = array(
+      'phutil',
+      'arcanist',
+    );
+
+    foreach ($libraries as $library_name) {
+      echo tsprintf(
+        "**<bg:magenta> %s </bg>** %s\n",
+        pht('LOAD'),
+        pht(
+          'Loaded "%s" from "%s".',
+          $library_name,
+          phutil_get_library_root($library_name)));
+    }
+  }
 
   if (!$args) {
     if ($help) {
@@ -274,7 +284,9 @@ try {
   $blind_key = 'https.blindly-trust-domains';
   $blind_trust = $configuration_manager->getConfigFromAnySource($blind_key);
   if ($blind_trust) {
-    HTTPSFuture::setBlindlyTrustDomains($blind_trust);
+    $trust_extension = PhutilHTTPEngineExtension::requireExtension(
+      ArcanistBlindlyTrustHTTPEngineExtension::EXTENSIONKEY);
+    $trust_extension->setDomains($blind_trust);
   }
 
   if ($need_conduit) {

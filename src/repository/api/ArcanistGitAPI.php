@@ -826,6 +826,22 @@ final class ArcanistGitAPI extends ArcanistRepositoryAPI {
         $mask |= self::FLAG_EXTERNALS;
       } else if (isset($flags[$flag])) {
         $mask |= $flags[$flag];
+      } else if ($flag[0] == 'R') {
+        $both = explode("\t", $file);
+        if ($full) {
+          $files[$both[0]] = array(
+            'mask' => $mask | self::FLAG_DELETED,
+            'ref'  => str_repeat('0', 40),
+          );
+        } else {
+          $files[$both[0]] = $mask | self::FLAG_DELETED;
+        }
+        $file = $both[1];
+        $mask |= self::FLAG_ADDED;
+      } else if ($flag[0] == 'C') {
+        $both = explode("\t", $file);
+        $file = $both[1];
+        $mask |= self::FLAG_ADDED;
       }
 
       if ($full) {
@@ -966,19 +982,43 @@ final class ArcanistGitAPI extends ArcanistRepositoryAPI {
    * @return list<dict<string, string>> Dictionary of branch information.
    */
   public function getAllBranches() {
-    list($ref_list) = $this->execxLocal(
-      'for-each-ref --format=%s refs/heads',
-      '%(refname)');
-    $refs = explode("\n", rtrim($ref_list));
+    $field_list = array(
+      '%(refname)',
+      '%(objectname)',
+      '%(committerdate:raw)',
+      '%(tree)',
+      '%(subject)',
+      '%(subject)%0a%0a%(body)',
+      '%02',
+    );
+
+    list($stdout) = $this->execxLocal(
+      'for-each-ref --format=%s -- refs/heads',
+      implode('%01', $field_list));
 
     $current = $this->getBranchName();
     $result = array();
-    foreach ($refs as $ref) {
+
+    $lines = explode("\2", $stdout);
+    foreach ($lines as $line) {
+      $line = trim($line);
+      if (!strlen($line)) {
+        continue;
+      }
+
+      $fields = explode("\1", $line, 6);
+      list($ref, $hash, $epoch, $tree, $desc, $text) = $fields;
+
       $branch = $this->getBranchNameFromRef($ref);
       if ($branch) {
         $result[] = array(
           'current' => ($branch === $current),
-          'name'    => $branch,
+          'name' => $branch,
+          'hash' => $hash,
+          'tree' => $tree,
+          'epoch' => (int)$epoch,
+          'desc' => $desc,
+          'text' => $text,
         );
       }
     }
@@ -1216,8 +1256,20 @@ final class ArcanistGitAPI extends ArcanistRepositoryAPI {
             // Ideally, we would use something like "for-each-ref --contains"
             // to get a filtered list of branches ready for script consumption.
             // Instead, try to get predictable output from "branch --contains".
+
+            $flags = array();
+            $flags[] = '--no-color';
+
+            // NOTE: The "--no-column" flag was introduced in Git 1.7.11, so
+            // don't pass it if we're running an older version. See T9953.
+            $version = $this->getGitVersion();
+            if (version_compare($version, '1.7.11', '>=')) {
+              $flags[] = '--no-column';
+            }
+
             list($branches) = $this->execxLocal(
-              '-c column.ui=never -c color.ui=never branch --contains %s',
+              'branch %Ls --contains %s',
+              $flags,
               $commit);
             $branches = array_filter(explode("\n", $branches));
 

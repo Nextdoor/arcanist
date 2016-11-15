@@ -9,7 +9,17 @@ final class NoseTestEngine extends ArcanistUnitTestEngine {
 
   private $parser;
 
+  protected function supportsRunAllTests() {
+    return true;
+  }
+
   public function run() {
+    if ($this->getRunAllTests()) {
+      $root = $this->getWorkingCopy()->getProjectRoot();
+      $all_tests = glob(Filesystem::resolvePath("$root/tests/**/test_*.py"));
+      return $this->runTests($all_tests, $root);
+    }
+
     $paths = $this->getPaths();
 
     $affected_tests = array();
@@ -116,8 +126,12 @@ final class NoseTestEngine extends ArcanistUnitTestEngine {
   }
 
   public function readCoverage($cover_file, $source_path) {
+    $coverage_xml = Filesystem::readFile($cover_file);
+    if (strlen($coverage_xml) < 1) {
+      return array();
+    }
     $coverage_dom = new DOMDocument();
-    $coverage_dom->loadXML(Filesystem::readFile($cover_file));
+    $coverage_dom->loadXML($coverage_xml);
 
     $reports = array();
     $classes = $coverage_dom->getElementsByTagName('class');
