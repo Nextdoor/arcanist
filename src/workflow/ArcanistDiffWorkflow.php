@@ -2800,12 +2800,13 @@ EOTEXT
       $ref_list[] = $ref['commit'].':'.$ref['ref'];
     }
 
+    $diff_branch = "phabricator/diff/{$id}";
     $err = phutil_passthru(
       'git push %Ls -- %s %s:refs/heads/%s',
       $push_flags,
       $staging_uri,
       $commit,
-      $diff_tag);
+      $diff_branch);
 
     if ($err) {
       $this->writeWarn(
