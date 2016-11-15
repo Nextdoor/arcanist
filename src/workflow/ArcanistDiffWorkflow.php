@@ -2801,10 +2801,11 @@ EOTEXT
     }
 
     $err = phutil_passthru(
-      'git push %Ls -- %s %Ls',
+      'git push %Ls -- %s %s:refs/heads/%s',
       $push_flags,
       $staging_uri,
-      $ref_list);
+      $commit,
+      $diff_tag);
 
     if ($err) {
       $this->writeWarn(
