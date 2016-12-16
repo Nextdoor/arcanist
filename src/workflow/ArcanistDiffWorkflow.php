@@ -2778,7 +2778,7 @@ EOTEXT
     // In these cases, the staging area should automatically have up-to-date
     // refs.
     $base_commit = $api->getSourceControlBaseRevision();
-    if ($base_commit !== ArcanistGitAPI::GIT_MAGIC_ROOT_COMMIT) {
+    if ($base_commit !== ArcanistGitAPI::GIT_MAGIC_ROOT_COMMIT and false) {
       $refs[] = array(
         'ref' => $base_tag,
         'type' => 'base',
@@ -2800,13 +2800,11 @@ EOTEXT
       $ref_list[] = $ref['commit'].':'.$ref['ref'];
     }
 
-    $diff_branch = "phabricator/diff/{$id}";
     $err = phutil_passthru(
-      'git push %Ls -- %s %s:refs/heads/%s',
+      'git push %Ls -- %s %Ls',
       $push_flags,
       $staging_uri,
-      $commit,
-      $diff_branch);
+      $ref_list);
 
     if ($err) {
       $this->writeWarn(
